@@ -132,7 +132,8 @@ $('setupForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy(
 }); };
 
 $('loginForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy(f, async () => {
-  const box = await (await fetch(`config.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+  const box = await loadConfig();
+  if (!box) throw new Error('Панель ещё не настроена.');
   const token = await decryptSecret(box, f.password.value);
   if (!token) throw new Error('Пароль неверный.');
   repo = makeRepo(token);
@@ -165,6 +166,14 @@ $('uploadForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy
   f.reset();
 }); };
 
-fetch(`config.json?t=${Date.now()}`, { cache: 'no-store' }).then((r) => show(r.ok ? 'login' : 'setup')).catch(() => show('setup'));
+// The published copy of config.json appears a minute after setup; the repo copy is there at once, so check both.
+const RAW_CONFIG = 'https://raw.githubusercontent.com/Endermen4ick/psuna-site/main/admin/config.json';
+const loadConfig = async () => {
+  for (const url of [`config.json?t=${Date.now()}`, `${RAW_CONFIG}?t=${Date.now()}`]) {
+    try { const r = await fetch(url, { cache: 'no-store' }); if (r.ok) return await r.json(); } catch { /* try the next source */ }
+  }
+  return null;
+};
+loadConfig().then((box) => show(box ? 'login' : 'setup'));
 </script>
 </body></html>
