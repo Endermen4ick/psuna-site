@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Панель сайта</title>
+<style>
+*{box-sizing:border-box}body{font:16px/1.45 system-ui,sans-serif;margin:0 auto;max-width:760px;padding:20px 16px;color:#191919;background:#f4f4f2}
+h1{font-size:1.5rem;margin:.2em 0 .6em}h2{font-size:1.15rem;margin:0 0 12px}section{background:#fff;border-radius:12px;padding:18px;margin:0 0 18px}
+input{font:inherit;width:100%;padding:12px;border:1px solid #bbb;border-radius:8px;min-height:46px}
+button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:12px 16px;min-height:46px;background:#191919;color:#fff}
+button:disabled{opacity:.5;cursor:wait}button.quiet{background:#e7e7e4;color:#191919}button.danger{background:#b3261e}
+.row{display:grid;grid-template-columns:1.5fr 1fr;gap:8px;margin-bottom:8px}
+.works{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.work img{width:100%;aspect-ratio:4/5;object-fit:cover;border-radius:8px;display:block;background:#ddd}
+.tools{display:flex;gap:6px;margin-top:6px}.tools button{flex:1;padding:8px 4px;min-height:42px}
+.msg{background:#e5f3e8;padding:12px;border-radius:8px;margin-bottom:14px}.err{background:#fbe6e4}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px}label{display:block;margin-bottom:10px}.note{color:#555;font-size:.92rem}[hidden]{display:none!important}
+@media(max-width:520px){.row{grid-template-columns:1fr}}
+</style></head><body>
+<p class="msg" id="msg" hidden></p>
+<p class="note" id="loading">Загрузка…</p>
+
+<section id="setup" hidden><h1>Первая настройка</h1>
+<p class="note">Делает Артемий один раз. Нужен ключ GitHub для репозитория psuna-site с правом «Contents: Read and write». Ключ шифруется паролем и хранится только в зашифрованном виде.</p>
+<form id="setupForm"><label>Ключ GitHub<input name="token" autocomplete="off" required></label><label>Пароль для входа в панель, от 10 символов<input name="password" type="password" autocomplete="new-password" required minlength="10"></label><label>Пароль ещё раз<input name="password2" type="password" autocomplete="new-password" required minlength="10"></label><button>Сохранить</button></form></section>
+
+<section id="login" hidden><h1>Вход в панель</h1>
+<form id="loginForm"><label>Пароль<input name="password" type="password" autocomplete="current-password" required></label><button>Войти</button></form></section>
+
+<div id="panel" hidden>
+<div class="top"><h1>Панель сайта</h1><button class="quiet" id="logout" type="button">Выйти</button></div>
+<p class="note">После сохранения сайт обновляется примерно через минуту.</p>
+<section><h2>Цены</h2><form id="pricesForm"><div id="rows"></div><p class="note">Чтобы убрать строку, очистите её. Новую услугу впишите в пустую строку.</p><button>Сохранить цены</button></form></section>
+<section><h2>Работы</h2><form id="uploadForm" style="margin-bottom:14px"><label>Добавить фото<input type="file" name="photo" accept="image/*" required></label><button>Загрузить</button></form><div class="works" id="works"></div></section>
+<p><a href="/" target="_blank" rel="noopener">Открыть сайт</a></p>
+</div>
+
+<script type="module">
+import { makeRepo, encryptSecret, decryptSecret, block, replaceBlock, parsePrices, parseWorks, renderPrices, renderWorks, cleanPrices, textToB64 } from './lib.js';
+
+const $ = (id) => document.getElementById(id);
+let repo = null;
+let state = { prices: [], works: [] };
+
+const say = (text, bad) => { const m = $('msg'); m.textContent = text; m.hidden = !text; m.classList.toggle('err', Boolean(bad)); if (text) scrollTo(0, 0); };
+const show = (screen) => { $('loading').hidden = true; for (const s of ['setup', 'login', 'panel']) $(s).hidden = s !== screen; };
+const busy = async (form, fn) => { const b = form.querySelector('button'); b.disabled = true; try { await fn(); } catch (e) { say(e.message || 'Не получилось, попробуйте ещё раз.', true); } finally { b.disabled = false; } };
+const el = (tag, attrs = {}, text) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; };
+
+const loadSite = async () => {
+  const page = (await repo.read('index.html')).text;
+  state = { prices: parsePrices(block(page, 'prices')), works: parseWorks(block(page, 'works')) };
+  drawPrices();
+  drawWorks();
+};
+
+// Every save reads the current page first, so two edits in a row never overwrite each other.
+const savePage = async (change, message) => {
+  const { sha, text } = await repo.read('index.html');
+  await repo.write('index.html', textToB64(change(text)), message, sha);
+};
+
+const drawPrices = () => {
+  const box = $('rows');
+  box.textContent = '';
+  for (const p of [...state.prices, { name: '', price: '' }]) {
+    const row = el('div', { class: 'row' });
+    const n = el('input', { name: 'name', placeholder: 'Услуга', 'aria-label': 'Услуга' }); n.value = p.name;
+    const v = el('input', { name: 'price', placeholder: 'Цена', 'aria-label': 'Цена' }); v.value = p.price;
+    row.append(n, v);
+    box.append(row);
+  }
+};
+
+const saveWorks = async (works, done) => {
+  await savePage((page) => replaceBlock(page, 'works', renderWorks(works)), 'Работы обновлены в панели');
+  state.works = works;
+  drawWorks();
+  say(done);
+};
+
+const drawWorks = () => {
+  const box = $('works');
+  box.textContent = '';
+  state.works.forEach((src, i) => {
+    const card = el('div', { class: 'work' });
+    card.append(el('img', { src: `../${src}`, alt: '' }));
+    const tools = el('div', { class: 'tools' });
+    const up = el('button', { class: 'quiet', type: 'button', 'aria-label': 'Выше' }, '↑');
+    const down = el('button', { class: 'quiet', type: 'button', 'aria-label': 'Ниже' }, '↓');
+    const del = el('button', { class: 'danger', type: 'button' }, 'Убрать');
+    const run = (fn) => async () => { for (const b of box.querySelectorAll('button')) b.disabled = true; try { await fn(); } catch (e) { say(e.message, true); drawWorks(); } };
+    up.onclick = run(() => { if (!i) return drawWorks(); const w = [...state.works]; w.splice(i - 1, 0, w.splice(i, 1)[0]); return saveWorks(w, 'Порядок изменён.'); });
+    down.onclick = run(() => { if (i === state.works.length - 1) return drawWorks(); const w = [...state.works]; w.splice(i + 1, 0, w.splice(i, 1)[0]); return saveWorks(w, 'Порядок изменён.'); });
+    del.onclick = run(() => { if (state.works.length < 2) { say('Должна остаться хотя бы одна работа.', true); return drawWorks(); } const w = [...state.works]; w.splice(i, 1); return saveWorks(w, 'Фото убрано с сайта.'); });
+    tools.append(up, down, del);
+    card.append(tools);
+    box.append(card);
+  });
+};
+
+// Photos are shrunk in the browser to 1100 px WebP, like the rest of the site.
+const toWebp = (file) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.onload = () => {
+    const k = Math.min(1, 1100 / Math.max(img.width, img.height));
+    const c = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    c.toBlob((b) => (b ? resolve(b) : reject(new Error('Не получилось обработать фото.'))), 'image/webp', 0.75);
+    URL.revokeObjectURL(img.src);
+  };
+  img.onerror = () => reject(new Error('Это не фото или формат не поддерживается.'));
+  img.src = URL.createObjectURL(file);
+});
+const blobToB64 = (blob) => new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1]); r.readAsDataURL(blob); });
+
+$('setupForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy(f, async () => {
+  if (f.password.value !== f.password2.value) throw new Error('Пароли не совпадают.');
+  if (f.password.value.length < 10) throw new Error('Пароль должен быть не короче 10 символов.');
+  const candidate = makeRepo(f.token.value.trim());
+  const info = await candidate.check();
+  if (!info.permissions?.push) throw new Error('У ключа нет права записи в репозиторий.');
+  const box = await encryptSecret(f.token.value.trim(), f.password.value);
+  let sha;
+  try { sha = (await candidate.read('admin/config.json')).sha; } catch { sha = undefined; }
+  await candidate.write('admin/config.json', textToB64(JSON.stringify(box)), 'Настройка панели', sha);
+  repo = candidate;
+  f.reset();
+  say('Готово. Панель настроена, пароль сохранён.');
+  show('panel');
+  await loadSite();
+}); };
+
+$('loginForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy(f, async () => {
+  const box = await (await fetch(`config.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+  const token = await decryptSecret(box, f.password.value);
+  if (!token) throw new Error('Пароль неверный.');
+  repo = makeRepo(token);
+  f.reset();
+  say('');
+  show('panel');
+  await loadSite();
+}); };
+
+$('logout').onclick = () => { repo = null; state = { prices: [], works: [] }; say(''); show('login'); };
+
+$('pricesForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy(f, async () => {
+  const names = f.querySelectorAll('[name=name]');
+  const values = f.querySelectorAll('[name=price]');
+  const prices = cleanPrices([...names].map((n, i) => ({ name: n.value, price: values[i].value })));
+  if (!prices.length) throw new Error('Нужна хотя бы одна строка с ценой.');
+  await savePage((page) => replaceBlock(page, 'prices', renderPrices(prices)), 'Цены обновлены в панели');
+  state.prices = prices;
+  drawPrices();
+  say('Цены сохранены. На сайте обновятся примерно через минуту.');
+}); };
+
+$('uploadForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy(f, async () => {
+  const file = f.photo.files[0];
+  if (!file) throw new Error('Выберите фото.');
+  say('Загружаем фото…');
+  const name = `img/u-${Date.now().toString(36)}.webp`;
+  await repo.write(name, await blobToB64(await toWebp(file)), 'Фото добавлено в панели');
+  await saveWorks([...state.works, name], 'Фото добавлено. На сайте появится примерно через минуту.');
+  f.reset();
+}); };
+
+fetch(`config.json?t=${Date.now()}`, { cache: 'no-store' }).then((r) => show(r.ok ? 'login' : 'setup')).catch(() => show('setup'));
+</script>
+</body></html>
