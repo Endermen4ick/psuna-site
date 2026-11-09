@@ -29,14 +29,14 @@ button:disabled{opacity:.5;cursor:wait}button.quiet{background:#e7e7e4;color:#19
 
 <div id="panel" hidden>
 <div class="top"><h1>Панель сайта</h1><button class="quiet" id="logout" type="button">Выйти</button></div>
-<p class="note">После сохранения сайт обновляется примерно через минуту.</p>
+<p class="note">После сохранения сайт обновляется за 2–5 минут. Если изменений ещё не видно, обновите страницу сайта чуть позже.</p>
 <section><h2>Цены</h2><form id="pricesForm"><div id="rows"></div><p class="note">Чтобы убрать строку, очистите её. Новую услугу впишите в пустую строку.</p><button>Сохранить цены</button></form></section>
 <section><h2>Работы</h2><form id="uploadForm" style="margin-bottom:14px"><label>Добавить фото<input type="file" name="photo" accept="image/*" required></label><button>Загрузить</button></form><div class="works" id="works"></div></section>
 <p><a href="/" target="_blank" rel="noopener">Открыть сайт</a></p>
 </div>
 
 <script type="module">
-import { makeRepo, encryptSecret, decryptSecret, block, replaceBlock, parsePrices, parseWorks, renderPrices, renderWorks, cleanPrices, textToB64 } from './lib.js';
+import { REPO, makeRepo, encryptSecret, decryptSecret, block, replaceBlock, parsePrices, parseWorks, renderPrices, renderWorks, cleanPrices, textToB64 } from './lib.js';
 
 const $ = (id) => document.getElementById(id);
 let repo = null;
@@ -84,7 +84,10 @@ const drawWorks = () => {
   box.textContent = '';
   state.works.forEach((src, i) => {
     const card = el('div', { class: 'work' });
-    card.append(el('img', { src: `../${src}`, alt: '' }));
+    const img = el('img', { src: `../${src}`, alt: '' });
+    // A just-uploaded photo is not published yet: show it straight from the repo.
+    img.onerror = () => { img.onerror = null; img.src = `https://raw.githubusercontent.com/${REPO}/main/${src}`; };
+    card.append(img);
     const tools = el('div', { class: 'tools' });
     const up = el('button', { class: 'quiet', type: 'button', 'aria-label': 'Выше' }, '↑');
     const down = el('button', { class: 'quiet', type: 'button', 'aria-label': 'Ниже' }, '↓');
@@ -153,7 +156,7 @@ $('pricesForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy
   await savePage((page) => replaceBlock(page, 'prices', renderPrices(prices)), 'Цены обновлены в панели');
   state.prices = prices;
   drawPrices();
-  say('Цены сохранены. На сайте обновятся примерно через минуту.');
+  say('Цены сохранены. На сайте обновятся за 2–5 минут.');
 }); };
 
 $('uploadForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy(f, async () => {
@@ -162,7 +165,7 @@ $('uploadForm').onsubmit = (e) => { e.preventDefault(); const f = e.target; busy
   say('Загружаем фото…');
   const name = `img/u-${Date.now().toString(36)}.webp`;
   await repo.write(name, await blobToB64(await toWebp(file)), 'Фото добавлено в панели');
-  await saveWorks([...state.works, name], 'Фото добавлено. На сайте появится примерно через минуту.');
+  await saveWorks([...state.works, name], 'Фото добавлено. На сайте появится за 2–5 минут.');
   f.reset();
 }); };
 
